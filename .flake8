@@ -1,0 +1,7 @@
+# -*- mode: any-ini -*-
+[flake8]
+max-line-length = 110
+exclude =
+    proto
+# Lint everything but docs (D)
+select = E,F,W,C
