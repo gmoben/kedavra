@@ -9,9 +9,42 @@ import structlog
 
 LOG = structlog.get_logger()
 
-RESOLUTIONS = (fn.RESOLUTION_LOW, fn.RESOLUTION_MEDIUM, fn.RESOLUTION_HIGH)
-VIDEO_FORMATS = (fn.VIDEO_RGB, fn.VIDEO_IR_8BIT)
-DEPTH_FORMATS = (fn.DEPTH_10BIT, fn.DEPTH_11BIT, fn.DEPTH_MM, fn.DEPTH_REGISTERED)
+# Defined here, but let's validate before trying to call `set_XXX_mode` in the first place.
+# https://github.com/OpenKinect/libfreenect/blob/master/src/cameras.c#L41-L74
+#
+# Formats supported by the C++ API but not the Cython wrapper are commented out
+# (although this would be easy to implement...)
+# https://github.com/OpenKinect/libfreenect/blob/master/wrappers/python/freenect.pyx#L508
+# https://github.com/OpenKinect/libfreenect/blob/master/wrappers/python/freenect.pyx#L538-L548
+SUPPORTED_VIDEO_MODES = {
+    fn.RESOLUTION_HIGH: (
+        fn.VIDEO_RGB,
+        # fn.VIDEO_BAYER,
+        fn.VIDEO_IR_8BIT,
+        fn.VIDEO_IR_10BIT,
+        # fn.VIDEO_IR_10BIT_PACKED,
+    ),
+    fn.RESOLUTION_MEDIUM: (
+        fn.VIDEO_RGB,
+        # fn.VIDEO_BAYER,
+        fn.VIDEO_IR_8BIT,
+        fn.VIDEO_IR_10BIT,
+        # fn.VIDEO_IR_10BIT_PACKED,
+        # fn.VIDEO_YUV_RGB,
+        # fn.VIDEO_YUV_RAW
+    )
+}
+SUPPORTED_DEPTH_MODES = {
+    fn.RESOLUTION_MEDIUM: (
+        fn.DEPTH_11BIT,
+        fn.DEPTH_10BIT,
+        # fn.DEPTH_11BIT_PACKED,
+        # fn.DEPTH_10BIT_PACKED,
+        fn.DEPTH_REGISTERED,
+        fn.DEPTH_MM
+    )
+}
+
 
 # Globals
 _ctx = None
@@ -40,43 +73,64 @@ class FreenectMode:
     fmt: int
 
     def __post_init__(self):
-        self._res_index = RESOLUTIONS.index(self.resolution)
+        if not hasattr(self, 'SUPPORTED_MODES'):
+            raise AttributeError('SUPPORTED_MODES must be assigned in the subclass')
+        self.validate()
+        self.SUPPORTED_RESOLUTIONS = sorted(list(self.SUPPORTED_MODES.keys()))
+
+    def validate(self):
+        try:
+            assert self.resolution in self.SUPPORTED_MODES
+        except AssertionError:
+            LOG.error('Unsupported resolution', resolution=self.resolution,
+                      supported=list(self.SUPPORTED_MODES.keys()))
+            raise
+        try:
+            assert self.fmt in self.SUPPORTED_MODES[self.resolution]
+        except AssertionError:
+            LOG.error('Unsupported format for resolution', resolution=self.resolution, format=self.fmt,
+                      supported_formats=list(self.SUPPORTED_MODES[self.resolution]))
+            raise
 
     def cycle_resolution(self):
-        self._res_index = (self._res_index + 1) % len(RESOLUTIONS)
-        self.resolution = RESOLUTIONS[self._res_index]
+        index = self.SUPPORTED_RESOLUTIONS.index(self.resolution)
+        index = (index + 1) % len(self.SUPPORTED_RESOLUTIONS)
+        self.resolution = self.SUPPORTED_RESOLUTIONS[index]
+        self.validate()
 
     def increase_resolution(self):
-        self._res_index = min((self._res_index + 1), (len(RESOLUTIONS) - 1))
-        self.resolution = RESOLUTIONS[self._res_index]
+        index = self.SUPPORTED_RESOLUTIONS.index(self.resolution)
+        index = min((index + 1), (len(self.SUPPORTED_RESOLUTIONS) - 1))
+        self.resolution = self.SUPPORTED_RESOLUTIONS[index]
+        self.validate()
 
     def decrease_resolution(self):
-        self._res_index = max((self._res_index - 1), 0)
-        self.resolution = RESOLUTIONS[self._res_index]
+        index = self.SUPPORTED_RESOLUTIONS.index(self.resolution)
+        index = max((index - 1), 0)
+        self.resolution = self.SUPPORTED_RESOLUTIONS[index]
+        self.validate()
+
+    def cycle_format(self):
+        index = self.SUPPORTED_MODES[self.resolution].index(self.fmt)
+        index = (index + 1) % len(self.SUPPORTED_MODES[self.resolution])
+        self.fmt = self.SUPPORTED_MODES[self.resolution][index]
+        self.validate()
 
 
 @dataclass
 class DepthMode(FreenectMode):
 
     def __post_init__(self):
+        self.SUPPORTED_MODES = SUPPORTED_DEPTH_MODES
         super().__post_init__()
-        self._fmt_index = DEPTH_FORMATS.index(self.fmt)
-
-    def cycle_format(self):
-        self._fmt_index = (self._fmt_index + 1) % len(DEPTH_FORMATS)
-        self.fmt = DEPTH_FORMATS[self._res_index]
 
 
 @dataclass
 class VideoMode(FreenectMode):
 
     def __post_init__(self):
+        self.SUPPORTED_MODES = SUPPORTED_VIDEO_MODES
         super().__post_init__()
-        self._fmt_index = VIDEO_FORMATS.index(self.fmt)
-
-    def cycle_format(self):
-        self._fmt_index = (self._fmt_index + 1) % len(VIDEO_FORMATS)
-        self.fmt = VIDEO_FORMATS[self._res_index]
 
 
 class DeviceController:
@@ -87,7 +141,7 @@ class DeviceController:
         self.device_num = device_num
         self.device = None
         self.video_mode = video_mode or VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_IR_8BIT)
-        self.depth_mode = depth_mode or DepthMode(fn.RESOLUTION_HIGH, fn.DEPTH_11BIT)
+        self.depth_mode = depth_mode or DepthMode(fn.RESOLUTION_MEDIUM, fn.DEPTH_11BIT)
         self._should_kill = False
         self._actions = {
             'q': self.kill,
