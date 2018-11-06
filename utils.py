@@ -165,6 +165,9 @@ class DeviceController:
         fn.set_depth_mode(self.device, self.depth_mode.resolution, self.depth_mode.fmt)
 
     def set_modes(self):
+        # This doesn't work right now unfortunately
+        # TODO: Add reset function to stop streams, close and recreate the device,
+        # set the modes, and run display again. Might need to avoid using `runloop`
         self.set_video_mode()
         self.set_depth_mode()
 
@@ -220,7 +223,7 @@ class DeviceController:
 
         def body_cb(dev, ctx):
             if self._should_kill:
-                LOG.info('Killing displays')
+                LOG.info('Killing streams')
                 raise fn.Kill
 
         on_video = video_cb if video else None
