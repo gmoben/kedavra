@@ -67,6 +67,13 @@ def get_device(dev_num=0):
     return dev
 
 
+def remove_device(dev_num):
+    try:
+        del _devices[dev_num]
+    except KeyError:
+        LOG.warning("Device wasn't registered", device_number=dev_num)
+
+
 @dataclass
 class FreenectMode:
     resolution: int
@@ -230,8 +237,3 @@ class DeviceController:
         on_depth = depth_cb if depth else None
 
         fn.runloop(depth=on_depth, video=on_video, body=body_cb, dev=self.device)
-
-
-if __name__ == '__main__':
-    controller = DeviceController()
-    controller.display()
