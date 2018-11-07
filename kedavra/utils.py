@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import cv2 as cv
@@ -44,34 +44,6 @@ SUPPORTED_DEPTH_MODES = {
         fn.DEPTH_MM
     )
 }
-
-
-# Globals
-_ctx = None
-_devices = {}
-
-
-def get_ctx():
-    global _ctx
-    if not _ctx:
-        _ctx = fn.init()
-    return _ctx
-
-
-def get_device(dev_num=0):
-    if dev_num in _devices:
-        return _devices[dev_num]
-
-    dev = fn.open_device(get_ctx(), dev_num)
-    _devices[dev_num] = dev
-    return dev
-
-
-def remove_device(dev_num):
-    try:
-        del _devices[dev_num]
-    except KeyError:
-        LOG.warning("Device wasn't registered", device_number=dev_num)
 
 
 @dataclass
@@ -138,6 +110,42 @@ class VideoMode(FreenectMode):
     def __post_init__(self):
         self.SUPPORTED_MODES = SUPPORTED_VIDEO_MODES
         super().__post_init__()
+
+
+IR_MODE = VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_IR_8BIT)
+RGB_MODE = VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_RGB)
+
+
+# Globals
+_ctx = None
+_devices = {}
+
+
+def get_ctx():
+    global _ctx
+    if not _ctx:
+        _ctx = fn.init()
+    return _ctx
+
+
+def num_devices():
+    return fn.num_devices(get_ctx())
+
+
+def get_device(dev_num=0):
+    if dev_num in _devices:
+        return _devices[dev_num]
+
+    dev = fn.open_device(get_ctx(), dev_num)
+    _devices[dev_num] = dev
+    return dev
+
+
+def remove_device(dev_num):
+    try:
+        del _devices[dev_num]
+    except KeyError:
+        LOG.warning("Device wasn't registered", device_number=dev_num)
 
 
 class DeviceController:
@@ -222,6 +230,8 @@ class DeviceController:
             self.set_depth_mode()
 
         def video_cb(dev, video, timestamp):
+            if self.video_mode.fmt == fn.VIDEO_RGB:
+                video = cv.cvtColor(video, cv.COLOR_RGB2BGR)
             cv.imshow(f'Video - Device {self.device_num}', video)
             self.waitKey()
 
@@ -237,3 +247,4 @@ class DeviceController:
         on_depth = depth_cb if depth else None
 
         fn.runloop(depth=on_depth, video=on_video, body=body_cb, dev=self.device)
+        cv.destroyAllWindows()
