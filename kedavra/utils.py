@@ -112,8 +112,10 @@ class VideoMode(FreenectMode):
         super().__post_init__()
 
 
-IR_MODE = VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_IR_8BIT)
-RGB_MODE = VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_RGB)
+DEFAULT_VIDEO_MODES = {
+    'ir': VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_IR_8BIT),
+    'rgb': VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_RGB)
+}
 
 
 # Globals
@@ -155,8 +157,10 @@ class DeviceController:
                  depth_mode: Optional[DepthMode] = None):
         self.device_num = device_num
         self.device = None
-        self.video_mode = video_mode or VideoMode(fn.RESOLUTION_HIGH, fn.VIDEO_IR_8BIT)
-        self.depth_mode = depth_mode or DepthMode(fn.RESOLUTION_MEDIUM, fn.DEPTH_11BIT)
+        if not video_mode or depth_mode:
+            raise ValueError('Must supply at least one video mode or depth mode')
+        self.video_mode = video_mode
+        self.depth_mode = depth_mode
         self._should_kill = False
         self._actions = {
             'q': self.kill,
@@ -172,12 +176,14 @@ class DeviceController:
                             depth_mode=self.depth_mode)
 
     def set_video_mode(self):
-        self.log.debug('Setting video mode')
-        fn.set_video_mode(self.device, self.video_mode.resolution, self.video_mode.fmt)
+        if self.video_mode:
+            self.log.debug('Setting video mode')
+            fn.set_video_mode(self.device, self.video_mode.resolution, self.video_mode.fmt)
 
     def set_depth_mode(self):
-        self.log.debug('Setting depth mode')
-        fn.set_depth_mode(self.device, self.depth_mode.resolution, self.depth_mode.fmt)
+        if self.depth_mode:
+            self.log.debug('Setting depth mode')
+            fn.set_depth_mode(self.device, self.depth_mode.resolution, self.depth_mode.fmt)
 
     def set_modes(self):
         # This doesn't work right now unfortunately
@@ -187,26 +193,34 @@ class DeviceController:
         self.set_depth_mode()
 
     def cycle_video(self):
-        self.video_mode.cycle_format()
-        self.set_video_mode()
+        if self.video_mode:
+            self.video_mode.cycle_format()
+            self.set_video_mode()
 
     def cycle_depth(self):
-        self.depth_mode.cycle_format()
-        self.set_depth_mode()
+        if self.depth_mode:
+            self.depth_mode.cycle_format()
+            self.set_depth_mode()
 
     def cycle_resolution(self):
-        self.video_mode.cycle_resolution()
-        self.depth_mode.cycle_resolution()
+        if self.video_mode:
+            self.video_mode.cycle_resolution()
+        if self.depth_mode:
+            self.depth_mode.cycle_resolution()
         self.set_modes()
 
     def increase_resolution(self):
-        self.video_mode.increase_resolution()
-        self.depth_mode.increase_resolution()
+        if self.video_mode:
+            self.video_mode.increase_resolution()
+        if self.depth_mode:
+            self.depth_mode.increase_resolution()
         self.set_modes()
 
     def decrease_resolution(self):
-        self.video_mode.decrease_resolution()
-        self.depth_mode.decrease_resolution()
+        if self.video_mode:
+            self.video_mode.decrease_resolution()
+        if self.depth_mode:
+            self.depth_mode.decrease_resolution()
         self.set_modes()
 
     def kill(self):
@@ -231,6 +245,7 @@ class DeviceController:
 
         def video_cb(dev, video, timestamp):
             if self.video_mode.fmt == fn.VIDEO_RGB:
+                # OpenCV uses BGR instead of RGB
                 video = cv.cvtColor(video, cv.COLOR_RGB2BGR)
             cv.imshow(f'Video - Device {self.device_num}', video)
             self.waitKey()
