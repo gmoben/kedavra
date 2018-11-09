@@ -12,24 +12,26 @@ LOG = structlog.get_logger()
 
 ir_queue = Queue()
 
+THRESHOLD = 150
+
 
 def create_blob_detector():
     params = cv.SimpleBlobDetector_Params()
-    params.minThreshold = 150
+    params.minThreshold = THRESHOLD
     params.maxThreshold = 255
 
     params.filterByColor = True
     params.blobColor = 255
 
     params.filterByArea = True
-    params.minArea = 0.5
+    params.minArea = 0.01
     params.maxArea = 100
 
     params.filterByCircularity = True
     params.minCircularity = 0.1
 
     params.filterByConvexity = True
-    params.minConvexity = 0.5
+    params.minConvexity = 0.1
 
     params.filterByInertia = False
 
@@ -38,7 +40,7 @@ def create_blob_detector():
 
 detector = create_blob_detector()
 mog2 = cv.createBackgroundSubtractorMOG2(
-    history=10, varThreshold=10)
+    history=10, varThreshold=500)
 
 
 def worker():
@@ -46,14 +48,22 @@ def worker():
         image = ir_queue.get(timeout=3)
         image *= 255
         image = image.astype(np.uint8)
-        image[image < 150] = 0
-        mask = mog2.apply(image)
 
+        thresholded = image.copy()
+        thresholded[thresholded < THRESHOLD] = 0
+
+        mask = mog2.apply(thresholded)
         keypoints = detector.detect(mask)
+
         black = np.zeros(mask.shape, dtype=np.uint8)
+
         image_with_keypoints = cv.drawKeypoints(black, keypoints, np.array([]),
                                                 (0, 0, 255), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+        overlayed = cv.drawKeypoints(image, keypoints, np.array([]),
+                                     (0, 0, 255), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
+
         cv.imshow('Keypoints', image_with_keypoints)
+        cv.imshow('Overlayed', overlayed)
         ir_queue.task_done()
 
 
