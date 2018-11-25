@@ -1,4 +1,5 @@
 import threading
+import time
 from queue import Queue
 
 import cv2 as cv
@@ -13,6 +14,9 @@ LOG = structlog.get_logger()
 ir_queue = Queue()
 
 THRESHOLD = 150
+KEYPOINT_TIMEOUT = 1.5
+VELOCITY_LOWER_BOUND = 10
+VELOCITY_UPPER_BOUND = 80
 
 
 def create_blob_detector():
@@ -43,6 +47,32 @@ mog2 = cv.createBackgroundSubtractorMOG2(
     history=10, varThreshold=500)
 
 
+points = []
+trace = None
+last_point_ts = None
+
+
+def append_point(point):
+    global last_point_ts
+    if not points:
+        points.append((point[0], point[1]))
+    else:
+        prev_point = points[-1]
+        norm = cv.norm(prev_point - point)
+        if not VELOCITY_LOWER_BOUND <= norm <= VELOCITY_UPPER_BOUND:
+            return
+        LOG.info('NORM', norm=norm)
+        points.append((point[0], point[1]))
+    last_point_ts = time.clock()
+
+
+def save_and_reset_trace(shape):
+    global points
+    global trace
+    points = []
+    trace = np.zeros(shape, dtype=np.uint8)
+
+
 def worker():
     while True:
         image = ir_queue.get(timeout=3)
@@ -62,8 +92,25 @@ def worker():
         overlayed = cv.drawKeypoints(image, keypoints, np.array([]),
                                      (0, 0, 255), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
 
+        for p in cv.KeyPoint_convert(keypoints):
+            append_point(p)
+
+        if last_point_ts is not None:
+            elapsed_since_point = time.clock() - last_point_ts
+        else:
+            elapsed_since_point = 0
+
+        if trace is None or elapsed_since_point >= KEYPOINT_TIMEOUT:
+            save_and_reset_trace(mask.shape)
+
+        if len(points) >= 2:
+            p1 = points[-2]
+            p2 = points[-1]
+            cv.line(trace, p1, p2, (255, 255, 255), 2)
+
         cv.imshow('Keypoints', image_with_keypoints)
         cv.imshow('Overlayed', overlayed)
+        cv.imshow('Trace', trace)
         ir_queue.task_done()
 
 
