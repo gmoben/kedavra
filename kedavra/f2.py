@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 from queue import Queue
@@ -14,9 +15,11 @@ LOG = structlog.get_logger()
 ir_queue = Queue()
 
 THRESHOLD = 150
-KEYPOINT_TIMEOUT = 1.5
+KEYPOINT_TIMEOUT = 1
+DELAY_AFTER_RESET = 1.5
 VELOCITY_LOWER_BOUND = 10
-VELOCITY_UPPER_BOUND = 80
+VELOCITY_UPPER_BOUND = 120
+MIN_POINTS = 20
 
 
 def create_blob_detector():
@@ -50,6 +53,8 @@ mog2 = cv.createBackgroundSubtractorMOG2(
 points = []
 trace = None
 last_point_ts = None
+last_reset_ts = None
+ready = False
 
 
 def append_point(point):
@@ -61,19 +66,37 @@ def append_point(point):
         norm = cv.norm(prev_point - point)
         if not VELOCITY_LOWER_BOUND <= norm <= VELOCITY_UPPER_BOUND:
             return
-        LOG.info('NORM', norm=norm)
+        # LOG.debug('Velocity', norm=norm)
         points.append((point[0], point[1]))
-    last_point_ts = time.clock()
+    last_point_ts = time.process_time()
 
 
-def save_and_reset_trace(shape):
+def reset_trace(shape, save=True, outdir='/code/ben/kedavra/training'):
     global points
     global trace
+    global last_point_ts
+    global last_reset_ts
+    path = None
+    if save:
+        if not os.path.exists(outdir):
+            os.makedirs(outdir)
+        time_ns = time.time_ns()
+        path = f'{outdir}/{time_ns}.bmp'
+        num_points = len(points)
+        if num_points >= MIN_POINTS:
+            LOG.debug('Writing trace', path=path, num_points=num_points)
+            cv.imwrite(path, trace)
+        else:
+            LOG.debug('Not enough points to write trace', num_points=num_points)
+    LOG.debug('Resetting trace', save=save)
     points = []
     trace = np.zeros(shape, dtype=np.uint8)
+    last_point_ts = None
+    last_reset_ts = time.process_time()
 
 
 def worker():
+    global ready
     while True:
         image = ir_queue.get(timeout=3)
         image *= 255
@@ -83,7 +106,35 @@ def worker():
         thresholded[thresholded < THRESHOLD] = 0
 
         mask = mog2.apply(thresholded)
+
+        now = time.process_time()
+        if last_point_ts is not None:
+            elapsed_since_point = now - last_point_ts
+        else:
+            elapsed_since_point = 0
+
+        if trace is None:
+            reset_trace(mask.shape, save=False)
+        elif elapsed_since_point >= KEYPOINT_TIMEOUT:
+            reset_trace(mask.shape)
+
+        elapsed_since_reset = now - last_reset_ts
+
         keypoints = detector.detect(mask)
+
+        if elapsed_since_reset >= DELAY_AFTER_RESET:
+            if ready is False:
+                ready = True
+                LOG.info('Ready to record')
+            for p in cv.KeyPoint_convert(keypoints):
+                append_point(p)
+
+            if len(points) >= 2:
+                p1 = points[-2]
+                p2 = points[-1]
+                cv.line(trace, p1, p2, (255, 255, 255), 2)
+        else:
+            ready = False
 
         black = np.zeros(mask.shape, dtype=np.uint8)
 
@@ -91,22 +142,6 @@ def worker():
                                                 (0, 0, 255), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
         overlayed = cv.drawKeypoints(image, keypoints, np.array([]),
                                      (0, 0, 255), cv.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-
-        for p in cv.KeyPoint_convert(keypoints):
-            append_point(p)
-
-        if last_point_ts is not None:
-            elapsed_since_point = time.clock() - last_point_ts
-        else:
-            elapsed_since_point = 0
-
-        if trace is None or elapsed_since_point >= KEYPOINT_TIMEOUT:
-            save_and_reset_trace(mask.shape)
-
-        if len(points) >= 2:
-            p1 = points[-2]
-            p2 = points[-1]
-            cv.line(trace, p1, p2, (255, 255, 255), 2)
 
         cv.imshow('Keypoints', image_with_keypoints)
         cv.imshow('Overlayed', overlayed)
